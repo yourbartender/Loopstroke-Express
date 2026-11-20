@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Production & macOS app build outputs (rebuilt via `npm run build` / `npm run build:app`)
+dist/
+Loopstroke Express.app/
+*.zip
+.tmp_*
+
+# macOS / Windows OS metadata
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs & local environment
+*.log
+npm-debug.log*
+.env
+.env.local
+.env.*.local
+
+# Editor / IDE
+.vscode/
+.idea/
