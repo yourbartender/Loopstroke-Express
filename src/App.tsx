@@ -49,11 +49,9 @@ export const App: React.FC = () => {
         eng.activeLayerId = parseInt(e.key, 10);
         eng.notifyChange();
       } else if (e.key === "[") {
-        eng.brushParams.size = Math.max(2, eng.brushParams.size - 4);
-        eng.notifyChange();
+        eng.scaleBrushSize(0.88);
       } else if (e.key === "]") {
-        eng.brushParams.size = Math.min(140, eng.brushParams.size + 4);
-        eng.notifyChange();
+        eng.setBrushSize(Math.max(eng.brushParams.size + 2, Math.round(eng.brushParams.size * 1.14)));
       }
     };
 

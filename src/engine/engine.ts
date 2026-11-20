@@ -94,21 +94,26 @@ export class ExpressEngine {
   public loopMode: LoopMode = "loop";
   public trailSec = 0; // 0 = Full loop (hold), > 0 = comet trail in seconds (e.g. 1.0s)
 
+  public static readonly MAX_STROKES_PER_LAYER = 80;
+  public static readonly MAX_BRUSH_SIZE = 400;
+
   // Layers
   public layers: LayerState[] = [
     { id: 1, name: "Layer 1", opacity: 1.0, blend: "normal", visible: true, mode: "loop", strokes: [] },
     { id: 2, name: "Layer 2", opacity: 1.0, blend: "add", visible: true, mode: "loop", strokes: [] },
-    { id: 3, name: "Layer 3", opacity: 1.0, blend: "screen", visible: true, mode: "loop", strokes: [] },
+    { id: 3, name: "Layer 3", opacity: 1.0, blend: "difference", visible: true, mode: "loop", strokes: [] },
     { id: 4, name: "Layer 4", opacity: 1.0, blend: "multiply", visible: true, mode: "loop", strokes: [] },
   ];
   public activeLayerId = 1;
+  public randomColorPerStroke = false;
+  public limitNotice = "";
 
   // Active Brush
   public brushParams: BrushParams = {
-    brushId: "ink",
+    brushId: "hard",
     size: 32,
     opacity: 1.0,
-    spacing: 0.03,
+    spacing: 0.035,
     jitter: 0,
     flip: false,
     color: "#06b6d4",
@@ -124,6 +129,8 @@ export class ExpressEngine {
   private strokeLoopStart = 0;
   private lastStampDist = 0;
   private stampFlipCounter = 0;
+  private smoothHeading: number | null = null;
+  private limitNoticeTimer: number | null = null;
 
   // History for Undo / Redo
   private history: LayerState[][] = [];
@@ -222,18 +229,71 @@ export class ExpressEngine {
   }
 
   public clearActiveLayer() {
+    if (this.activeLayer.strokes.length === 0) return;
     this.pushHistory();
     this.activeLayer.strokes = [];
     this.renderer.clearLayer(this.activeLayerId);
+    this.limitNotice = "";
     this.notify();
   }
 
   public clearAll() {
+    if (this.layers.every((l) => l.strokes.length === 0)) return;
     this.pushHistory();
     for (const l of this.layers) {
       l.strokes = [];
       this.renderer.clearLayer(l.id);
     }
+    this.limitNotice = "";
+    this.notify();
+  }
+
+  public setBrushSize(sizePx: number) {
+    this.brushParams.size = Math.max(2, Math.min(ExpressEngine.MAX_BRUSH_SIZE, Math.round(sizePx)));
+    this.notify();
+  }
+
+  public scaleBrushSize(factor: number) {
+    const next = this.brushParams.size * factor;
+    const clamped = Math.max(2, Math.min(ExpressEngine.MAX_BRUSH_SIZE, next));
+    this.brushParams.size = Math.round(clamped * 10) / 10;
+    this.notify();
+  }
+
+  public pickRandomColor(): string {
+    const h = Math.floor(Math.random() * 360);
+    const s = 78 + Math.floor(Math.random() * 20);
+    const l = 52 + Math.floor(Math.random() * 16);
+    const hex = this.hslToHex(h, s, l);
+    this.brushParams.color = hex;
+    this.notify();
+    return hex;
+  }
+
+  private hslToHex(h: number, s: number, l: number): string {
+    const sNorm = s / 100;
+    const lNorm = l / 100;
+    const a = sNorm * Math.min(lNorm, 1 - lNorm);
+    const f = (n: number) => {
+      const k = (n + h / 30) % 12;
+      const color = lNorm - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+      return Math.round(255 * color)
+        .toString(16)
+        .padStart(2, "0");
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
+  }
+
+  private showLimitNotice(msg: string) {
+    this.limitNotice = msg;
+    if (this.limitNoticeTimer !== null) {
+      window.clearTimeout(this.limitNoticeTimer);
+    }
+    this.limitNoticeTimer = window.setTimeout(() => {
+      this.limitNotice = "";
+      this.limitNoticeTimer = null;
+      this.notify();
+    }, 2800);
     this.notify();
   }
 
@@ -289,6 +349,18 @@ export class ExpressEngine {
   public handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (e.button !== 0 && e.pointerType === "mouse") return;
     if (this.isDrawing) return;
+
+    if (this.activeLayer.strokes.length >= ExpressEngine.MAX_STROKES_PER_LAYER) {
+      this.showLimitNotice(
+        `Layer ${this.activeLayer.id} reached ${ExpressEngine.MAX_STROKES_PER_LAYER} strokes — clear or switch layer`,
+      );
+      return;
+    }
+
+    if (this.randomColorPerStroke) {
+      this.pickRandomColor();
+    }
+
     this.activePointerId = e.pointerId;
     try {
       this.canvas.setPointerCapture(e.pointerId);
@@ -307,6 +379,7 @@ export class ExpressEngine {
     this.strokeLoopStart = this.layerPhase(this.activeLayer);
     this.lastStampDist = 0;
     this.stampFlipCounter = 0;
+    this.smoothHeading = null;
 
     const pt0: StrokePoint = { x, y, p, tiltX, tiltY, t: 0 };
     this.activePoints = [pt0];
@@ -339,8 +412,17 @@ export class ExpressEngine {
       // Filter micro-noise jitter under 0.8px
       if (dist < 0.8 && this.activePoints.length > 1) continue;
 
-      const heading = Math.atan2(dy, dx);
-      const pt: StrokePoint = { x, y, p, tiltX, tiltY, t, h: heading };
+      const rawDir = Math.atan2(dy, dx);
+      if (this.smoothHeading === null) {
+        this.smoothHeading = rawDir;
+        if (last.h === undefined) last.h = rawDir;
+      } else {
+        const diff = Math.atan2(Math.sin(rawDir - this.smoothHeading), Math.cos(rawDir - this.smoothHeading));
+        const alpha = Math.min(1, dist / 20);
+        this.smoothHeading = this.smoothHeading + diff * alpha;
+      }
+
+      const pt: StrokePoint = { x, y, p, tiltX, tiltY, t, h: this.smoothHeading };
       this.activePoints.push(pt);
 
       this.addPointStamps(last, pt, false);
@@ -431,8 +513,15 @@ export class ExpressEngine {
     const dist = Math.hypot(dx, dy);
     if (dist <= 0) return;
 
-    // Angle of travel
-    const dir = Math.atan2(dy, dx);
+    // Smoothed angle of travel (prevents faceted/jagged curves on large directional brushes)
+    const rawDir = Math.atan2(dy, dx);
+    const h0 = p0.h ?? rawDir;
+    const h1 = p1.h ?? rawDir;
+    const hDiff = Math.atan2(Math.sin(h1 - h0), Math.cos(h1 - h0));
+    if (this.activePoints.length === 2 && this.activeStamps.length === 1 && (brush.spin === "follow" || brush.spin === "flip")) {
+      this.activeStamps[0]!.angle = h0;
+    }
+
     const avgPressure = (p0.p + p1.p) * 0.5;
     const effSize = baseSize * (1 - brush.pressureSize + brush.pressureSize * avgPressure);
     const step = Math.max(1.2, effSize * effSpacing);
@@ -468,7 +557,7 @@ export class ExpressEngine {
       }
 
       // Heading / rotation
-      let angle = brush.spin === "follow" || brush.spin === "flip" ? dir : 0;
+      let angle = brush.spin === "follow" || brush.spin === "flip" ? h0 + hDiff * u : 0;
       if (effAngleJitter > 0) {
         angle += (Math.random() - 0.5) * 2 * effAngleJitter;
       }

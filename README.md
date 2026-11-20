@@ -13,12 +13,15 @@
   - W3C Pointer Events (`pressure`, `tiltX`, `tiltY`) with `getCoalescedEvents()` for high-rate pen tracking.
   - Native macOS tablet bridge (`NSEvent` tablet pressure & tilt) inside the standalone macOS app.
   - Multi-touch gestures: **Two-finger tap to Undo**, **Three-finger tap to Redo**.
-- **10 Curated Brushes**:
-  - **Ink Pen** (`ink`), **Chisel Nib** (`calli`), **Foliage Leaf** (`leaf`), **Rake Comb** (`rake`), **Ink Splat** (`splat`), **Neon Glow** (`glow`), **Flow Ribbon** (`ribbon`), **Chalk Grain** (`chalk`), **Spray Airbrush** (`spray`), and **Solid Round** (`hard`).
-  - Live **Size**, **Opacity**, **Spacing**, **Jitter**, and **Flip** controls.
+  - Trackpad two-finger scroll/pinch brush sizing + live brush shape & size preview.
+- **10 Curated Brushes + Custom PNG Import**:
+  - **Solid Round** (`hard`), **Soft Round** (`soft`), **Wet Waterbrush** (`water`), **Chisel Nib** (`calli`), **Chalk Grain** (`chalk`), **Spray Paint** (`spray`), **Foliage Leaf** (`leaf`), **Rake Comb** (`rake`), **Ink Splat** (`splat`), and **Neon Glow** (`glow`).
+  - Import up to **8 custom PNG brush tips** (saved locally) and dial Size up to `400px`, Opacity, Spacing, Jitter, and Flip.
+- **Color Palette & Randomizer**:
+  - Distinct high-contrast color swatches, custom picker, instant **Random Color** button, and **Auto** random-color-per-stroke mode.
 - **4 Drawing Layers**:
-  - Blend modes: `Normal`, `Add (Glow)`, `Screen`, `Multiply`.
-  - Per-layer opacity, visibility toggle, playback mode, and clear.
+  - Blend modes: `Normal`, `Add (Glow)`, `Difference`, `Multiply`.
+  - Per-layer opacity, visibility toggle, playback mode, stroke cap (`80` strokes/layer), and undoable clear.
 - **Looping & Trails**:
   - **LOOP**, **PING-PONG**, and **HOLD** playback modes.
   - Readable cycle durations (`1s`, `2s`, `4s`, `8s`) plus **BPM** input & **Tap Tempo**.
@@ -91,6 +94,5 @@ npm run build && npx cap sync
 ---
 
 ## Roadmap / Known WIP
-- Pinch-to-zoom & two-finger pan on touch/trackpad.
-- Custom PNG brush tip import.
+- Pinch-to-zoom & two-finger canvas pan on touchscreens.
 - Additional brush & mobile UI refinements.

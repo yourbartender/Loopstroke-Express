@@ -1,7 +1,7 @@
 // WebGL2 hardware-accelerated renderer for Loopstroke Express
 import { tipMask } from "./brushes";
 
-export type ExpressBlendMode = "normal" | "add" | "screen" | "multiply";
+export type ExpressBlendMode = "normal" | "add" | "difference" | "multiply";
 
 const STAMP_VERT = `#version 300 es
 precision highp float;
@@ -76,15 +76,34 @@ precision highp float;
 in vec2 v_uv;
 
 uniform sampler2D u_layer;
+uniform sampler2D u_dst;
 uniform float u_opacity;
-uniform int u_blendMode; // 0=normal, 1=add, 2=screen, 3=multiply
+uniform int u_blendMode; // -1=copy, 0=normal, 1=add, 2=difference, 3=multiply
 
 out vec4 fragColor;
 
 void main() {
-  vec4 src = texture(u_layer, v_uv);
-  src *= u_opacity;
-  fragColor = src;
+  vec4 src = texture(u_layer, v_uv) * u_opacity;
+  if (u_blendMode < 0) {
+    fragColor = src;
+    return;
+  }
+  vec4 dst = texture(u_dst, v_uv);
+  vec3 outRgb;
+  if (u_blendMode == 1) {
+    // Add (Glow)
+    outRgb = min(vec3(1.0), dst.rgb + src.rgb);
+  } else if (u_blendMode == 2) {
+    // Difference (premultiplied alpha over opaque dst)
+    outRgb = dst.rgb * (1.0 - src.a) + abs(dst.rgb * src.a - src.rgb);
+  } else if (u_blendMode == 3) {
+    // Multiply (premultiplied alpha)
+    outRgb = dst.rgb * (1.0 - src.a) + dst.rgb * src.rgb;
+  } else {
+    // Normal (premultiplied source-over)
+    outRgb = src.rgb + dst.rgb * (1.0 - src.a);
+  }
+  fragColor = vec4(outRgb, 1.0);
 }
 `;
 
@@ -133,7 +152,9 @@ export class ExpressGLRenderer {
 
   // Layer FBOs
   private layerFBOs = new Map<number, LayerFBO>();
-  private tempFBO!: LayerFBO;
+  private tempFBO?: LayerFBO;
+  private compFBO?: LayerFBO;
+  private compAltFBO?: LayerFBO;
 
   public width = 1;
   public height = 1;
@@ -334,6 +355,36 @@ export class ExpressGLRenderer {
     if (this.tempFBO) {
       this.gl.deleteFramebuffer(this.tempFBO.fb);
       this.gl.deleteTexture(this.tempFBO.tex);
+      this.tempFBO = undefined;
+    }
+    if (this.compFBO) {
+      this.gl.deleteFramebuffer(this.compFBO.fb);
+      this.gl.deleteTexture(this.compFBO.tex);
+      this.compFBO = undefined;
+    }
+    if (this.compAltFBO) {
+      this.gl.deleteFramebuffer(this.compAltFBO.fb);
+      this.gl.deleteTexture(this.compAltFBO.tex);
+      this.compAltFBO = undefined;
+    }
+  }
+
+  private ensureTargetFBO(existing: LayerFBO | undefined): LayerFBO {
+    if (existing && existing.w === this.width && existing.h === this.height) {
+      return existing;
+    }
+    if (existing) {
+      this.gl.deleteFramebuffer(existing.fb);
+      this.gl.deleteTexture(existing.tex);
+    }
+    return this.createFBO(this.width, this.height);
+  }
+
+  public invalidateTipTexture(tipId: string) {
+    const tex = this.tipTextures.get(tipId);
+    if (tex) {
+      this.gl.deleteTexture(tex);
+      this.tipTextures.delete(tipId);
     }
   }
 
@@ -511,41 +562,66 @@ export class ExpressGLRenderer {
     layers: Array<{ id: number; opacity: number; blend: ExpressBlendMode; visible: boolean }>,
   ) {
     const gl = this.gl;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, this.width, this.height);
+    let dstFBO: LayerFBO = this.ensureTargetFBO(this.compFBO);
+    let altFBO: LayerFBO = this.ensureTargetFBO(this.compAltFBO);
+    this.compFBO = dstFBO;
+    this.compAltFBO = altFBO;
 
-    // Deep dark stage background
+    // Clear accumulation FBO with deep dark stage background
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dstFBO.fb);
+    gl.viewport(0, 0, this.width, this.height);
     gl.clearColor(0.04, 0.04, 0.05, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
     gl.useProgram(this.compProg);
     gl.bindVertexArray(this.compVao);
+    gl.disable(gl.BLEND);
 
-    gl.enable(gl.BLEND);
+    const uLayerLoc = gl.getUniformLocation(this.compProg, "u_layer");
+    const uDstLoc = gl.getUniformLocation(this.compProg, "u_dst");
+    const uOpacityLoc = gl.getUniformLocation(this.compProg, "u_opacity");
+    const uBlendLoc = gl.getUniformLocation(this.compProg, "u_blendMode");
 
     for (const l of layers) {
       if (!l.visible || l.opacity <= 0.001) continue;
       const fbo = this.getLayerFBO(l.id);
 
+      gl.bindFramebuffer(gl.FRAMEBUFFER, altFBO.fb);
+      gl.viewport(0, 0, this.width, this.height);
+
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, fbo.tex);
-      gl.uniform1i(gl.getUniformLocation(this.compProg, "u_layer"), 0);
-      gl.uniform1f(gl.getUniformLocation(this.compProg, "u_opacity"), l.opacity);
+      gl.uniform1i(uLayerLoc, 0);
 
-      // Blend mode setting
-      if (l.blend === "add") {
-        gl.blendFunc(gl.ONE, gl.ONE);
-      } else if (l.blend === "screen") {
-        gl.blendFunc(gl.ONE_MINUS_DST_COLOR, gl.ONE);
-      } else if (l.blend === "multiply") {
-        gl.blendFunc(gl.DST_COLOR, gl.ONE_MINUS_SRC_ALPHA);
-      } else {
-        // Normal pre-multiplied
-        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-      }
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, dstFBO.tex);
+      gl.uniform1i(uDstLoc, 1);
+
+      gl.uniform1f(uOpacityLoc, l.opacity);
+      const modeInt =
+        l.blend === "add" ? 1 : l.blend === "difference" ? 2 : l.blend === "multiply" ? 3 : 0;
+      gl.uniform1i(uBlendLoc, modeInt);
 
       gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      // Ping-pong swap
+      const tmp = dstFBO;
+      dstFBO = altFBO;
+      altFBO = tmp;
     }
+
+    this.compFBO = dstFBO;
+    this.compAltFBO = altFBO;
+
+    // Present final composited frame to screen
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.width, this.height);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, dstFBO.tex);
+    gl.uniform1i(uLayerLoc, 0);
+    gl.uniform1f(uOpacityLoc, 1.0);
+    gl.uniform1i(uBlendLoc, -1);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
 
     gl.bindVertexArray(null);
   }

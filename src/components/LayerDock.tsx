@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Eye, EyeOff, Trash2, Layers, Repeat, ArrowLeftRight, Shield } from "lucide-react";
-import type { ExpressEngine, LoopMode } from "../engine/engine";
+import { ExpressEngine, type LoopMode } from "../engine/engine";
 import type { ExpressBlendMode } from "../engine/renderer";
 
 interface LayerDockProps {
@@ -10,7 +10,7 @@ interface LayerDockProps {
 const BLEND_MODES: { id: ExpressBlendMode; label: string }[] = [
   { id: "normal", label: "Normal" },
   { id: "add", label: "Add (Glow)" },
-  { id: "screen", label: "Screen" },
+  { id: "difference", label: "Difference" },
   { id: "multiply", label: "Multiply" },
 ];
 
@@ -76,7 +76,7 @@ export const LayerDock: React.FC<LayerDockProps> = ({ engine }) => {
             value={active.blend}
             onChange={(e) => {
               active.blend = e.target.value as ExpressBlendMode;
-              setTick((t) => t + 1);
+              engine.notifyChange();
             }}
             className="bg-black/60 border border-white/10 rounded-lg px-2 py-1 text-xs text-white/80 font-mono focus:outline-none focus:border-cyan-400 cursor-pointer"
           >
@@ -121,19 +121,31 @@ export const LayerDock: React.FC<LayerDockProps> = ({ engine }) => {
             value={active.opacity}
             onChange={(e) => {
               active.opacity = parseFloat(e.target.value);
-              setTick((t) => t + 1);
+              engine.notifyChange();
             }}
             className="w-16 accent-cyan-400 cursor-pointer"
           />
           <span className="text-cyan-400 w-8">{Math.round(active.opacity * 100)}%</span>
         </div>
 
+        {/* Stroke count indicator */}
+        <span
+          className={`hidden sm:inline font-mono text-[10px] px-1.5 py-0.5 rounded bg-black/40 border border-white/10 ${
+            active.strokes.length >= ExpressEngine.MAX_STROKES_PER_LAYER
+              ? "text-amber-300 border-amber-400/40"
+              : "text-white/45"
+          }`}
+          title={`Strokes on Layer ${active.id} (max ${ExpressEngine.MAX_STROKES_PER_LAYER} per layer)`}
+        >
+          {active.strokes.length}/{ExpressEngine.MAX_STROKES_PER_LAYER}
+        </span>
+
         {/* Visibility & Clear */}
         <div className="flex items-center gap-1">
           <button
             onClick={() => {
               active.visible = !active.visible;
-              setTick((t) => t + 1);
+              engine.notifyChange();
             }}
             className={`p-1.5 rounded-lg transition-colors ${
               active.visible
@@ -146,13 +158,9 @@ export const LayerDock: React.FC<LayerDockProps> = ({ engine }) => {
           </button>
 
           <button
-            onClick={() => {
-              if (confirm(`Clear strokes on Layer ${active.id}?`)) {
-                engine.clearActiveLayer();
-              }
-            }}
+            onClick={() => engine.clearActiveLayer()}
             className="p-1.5 rounded-lg text-white/50 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-            title="Clear Active Layer"
+            title={`Clear Layer ${active.id} (Undo restores)`}
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
